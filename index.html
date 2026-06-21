@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>viewstl3d.com - 3D Model Viewer</title>
+    
+    <!-- PWA Manifest Link -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#3b82f6">
+    <link rel="apple-touch-icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256'><path d='M215.79,118.17a8,8,0,0,0,5-7.46V64a8,8,0,0,0-4.32-7.11l-80-40a8,8,0,0,0-7.36,0l-80,40A8,8,0,0,0,44.8,64v46.71a8,8,0,0,0,5,7.46l80,40a8,8,0,0,0,7.36,0Z' fill='none' stroke='%233b82f6' stroke-width='16'/></svg>">
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Phosphor Icons for UI -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; background-color: #111827; touch-action: none; }
+        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+        
+        /* UI Overlay */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between;}
+        .pointer-events-auto { pointer-events: auto; }
+        
+        /* Drag & Drop Overlay */
+        #drop-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(17, 24, 39, 0.85); z-index: 50;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            opacity: 0; pointer-events: none; transition: opacity 0.2s ease-in-out;
+            border: 4px dashed #3b82f6; box-sizing: border-box;
+        }
+        #drop-overlay.active { opacity: 1; pointer-events: auto; }
+
+        /* Loading Spinner */
+        .loader {
+            border: 4px solid rgba(255, 255, 255, 0.1); border-left-color: #3b82f6;
+            border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+
+    <!-- Three.js Import Map -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+                "fflate": "https://unpkg.com/fflate@0.8.1/esm/index.js"
+            }
+        }
+    </script>
+</head>
+<body class="text-white font-sans">
+
+    <!-- 3D Canvas -->
+    <div id="canvas-container"></div>
+
+    <!-- UI Layer -->
+    <div id="ui-layer" class="p-3 sm:p-4 md:p-6">
+        
+        <!-- Header / Logo -->
+        <div class="flex flex-col sm:flex-row justify-between items-stretch sm:items-start pointer-events-auto gap-3 w-full">
+            <div class="bg-gray-800/80 backdrop-blur-md px-3 py-2 sm:px-4 sm:py-3 rounded-xl sm:rounded-2xl shadow-lg border border-gray-700 flex items-center gap-2 sm:gap-3">
+                <i class="ph ph-cube text-2xl sm:text-3xl text-blue-400 flex-shrink-0"></i>
+                <div class="min-w-0">
+                    <h1 class="text-sm sm:text-lg font-bold leading-tight truncate">viewstl3d.com</h1>
+                    <p class="text-[10px] sm:text-xs text-gray-400 truncate">3D Model Viewer (.stl only)</p>
+                </div>
+            </div>
+
+            <!-- Upload Button (Top Right) -->
+            <button id="upload-btn" class="bg-blue-600 hover:bg-blue-500 transition-colors text-white px-4 py-2 sm:px-5 sm:py-3 rounded-xl sm:rounded-2xl shadow-lg flex items-center justify-center gap-2 font-medium">
+                <i class="ph ph-upload-simple text-lg sm:text-xl"></i>
+                <span>Upload Model</span>
+            </button>
+            <input type="file" id="file-input" accept=".stl" class="hidden">
+        </div>
+
+        <!-- Controls (Bottom) -->
+        <div class="flex justify-center pointer-events-auto pb-6 sm:pb-4 w-full">
+            <div id="controls-panel" class="bg-gray-800/80 backdrop-blur-md p-1.5 sm:p-2 rounded-2xl shadow-lg border border-gray-700 flex flex-wrap justify-center gap-1 sm:gap-2 items-center opacity-0 transition-opacity duration-300 transform translate-y-4 max-w-full">
+                
+                <button id="btn-reset" class="p-2 sm:p-3 rounded-xl hover:bg-gray-700 transition-colors text-gray-300 hover:text-white" title="Reset View">
+                    <i class="ph ph-corners-out text-lg sm:text-xl"></i>
+                </button>
+                
+                <div class="w-px h-6 bg-gray-600 mx-0.5 sm:mx-1"></div>
+
+                <button id="btn-wireframe" class="p-2 sm:p-3 rounded-xl hover:bg-gray-700 transition-colors text-gray-300 hover:text-white" title="Toggle Wireframe">
+                    <i class="ph ph-grid-four text-lg sm:text-xl"></i>
+                </button>
+                
+                <button id="btn-rotate" class="p-2 sm:p-3 rounded-xl bg-blue-600/20 text-blue-400 hover:bg-blue-600/40 transition-colors" title="Auto Rotate">
+                    <i class="ph ph-arrows-clockwise text-lg sm:text-xl"></i>
+                </button>
+
+                <div class="w-px h-6 bg-gray-600 mx-0.5 sm:mx-1"></div>
+
+                <!-- Model Color Picker -->
+                <div class="relative group p-2 sm:p-3 flex-shrink-0 flex items-center justify-center" title="Model Color">
+                    <input type="color" id="model-color-picker" value="#94a3b8" class="w-5 h-5 sm:w-6 sm:h-6 rounded cursor-pointer bg-transparent border-0 p-0">
+                </div>
+
+                <div class="w-px h-6 bg-gray-600 mx-0.5 sm:mx-1"></div>
+
+                <!-- Background Color Selectors -->
+                <div class="flex gap-1.5 sm:gap-2 items-center px-1 sm:px-2" title="Background Color">
+                    <button id="bg-black" class="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-[#111827] border-2 border-blue-500 shadow-sm transition-all hover:scale-110" title="Black Background"></button>
+                    <button id="bg-grey" class="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-gray-500 border-2 border-transparent hover:border-gray-400 shadow-sm transition-all hover:scale-110" title="Grey Background"></button>
+                    <button id="bg-white" class="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-white border-2 border-transparent hover:border-gray-400 shadow-sm transition-all hover:scale-110" title="White Background"></button>
+                </div>
+
+            </div>
+        </div>
+        
+        <!-- Watermark -->
+        <div class="absolute bottom-2 left-1/2 transform -translate-x-1/2 text-[9px] sm:text-[10px] md:text-xs text-white/40 font-medium pointer-events-none select-none tracking-widest z-0 text-center w-full whitespace-nowrap">
+            Made by Pixelmold 3D Solutions, 2026
+        </div>
+    </div>
+
+    <!-- Drag & Drop Area -->
+    <div id="drop-overlay">
+        <i class="ph ph-file-arrow-down text-6xl text-blue-400 mb-4 animate-bounce"></i>
+        <h2 class="text-3xl font-bold mb-2">Drop your 3D Model Here</h2>
+        <p class="text-gray-400 text-lg">Support .stl files only</p>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loading-state" class="absolute top-0 left-0 w-full h-full bg-gray-900/90 z-40 hidden flex-col items-center justify-center pointer-events-auto backdrop-blur-sm">
+        <div class="loader mb-4"></div>
+        <p class="text-lg font-medium text-blue-400" id="loading-text">Loading Model...</p>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="absolute bottom-6 left-1/2 transform -translate-x-1/2 bg-red-500 text-white px-6 py-3 rounded-xl shadow-xl z-50 transition-all duration-300 opacity-0 pointer-events-none translate-y-4">
+        Invalid file format. Please upload an STL file.
+    </div>
+
+    <!-- App Logic -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+        import { ThreeMFLoader } from 'three/addons/loaders/3MFLoader.js';
+
+        // Register Service Worker for PWA/APK capability
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js').catch(err => {
+                    console.log('ServiceWorker registration failed: ', err);
+                });
+            });
+        }
+
+        // --- DOM Elements ---
+        const container = document.getElementById('canvas-container');
+        const dropOverlay = document.getElementById('drop-overlay');
+        const loadingState = document.getElementById('loading-state');
+        const fileInput = document.getElementById('file-input');
+        const uploadBtn = document.getElementById('upload-btn');
+        const toast = document.getElementById('toast');
+        const controlsPanel = document.getElementById('controls-panel');
+        
+        // Buttons
+        const btnReset = document.getElementById('btn-reset');
+        const btnWireframe = document.getElementById('btn-wireframe');
+        const btnRotate = document.getElementById('btn-rotate');
+        const modelColorPicker = document.getElementById('model-color-picker');
+
+        // Background buttons
+        const bgBlackBtn = document.getElementById('bg-black');
+        const bgGreyBtn = document.getElementById('bg-grey');
+        const bgWhiteBtn = document.getElementById('bg-white');
+
+        // --- Three.js Setup ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111827); // Tailwind gray-900
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 10000);
+        camera.position.set(50, 50, 50);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        container.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 2.0;
+
+        // --- Lighting ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        dirLight.position.set(100, 200, 50);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        scene.add(dirLight);
+
+        const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
+        hemiLight.position.set(0, 200, 0);
+        scene.add(hemiLight);
+
+        // --- App State ---
+        let currentModel = null;
+        let isWireframe = false;
+        const defaultMaterial = new THREE.MeshStandardMaterial({ 
+            color: modelColorPicker.value, 
+            roughness: 0.4, 
+            metalness: 0.1,
+            side: THREE.DoubleSide
+        });
+
+        // --- Window Resize ---
+        window.addEventListener('resize', onWindowResize, false);
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- Animation Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // --- File Handling Logic ---
+
+        function showToast(message, isError = true) {
+            toast.textContent = message;
+            toast.classList.remove('bg-red-500', 'bg-green-500');
+            toast.classList.add(isError ? 'bg-red-500' : 'bg-green-500');
+            toast.style.opacity = '1';
+            toast.style.transform = 'translate(-50%, 0)';
+            
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translate(-50%, 16px)';
+            }, 3000);
+        }
+
+        function clearScene() {
+            if (currentModel) {
+                scene.remove(currentModel);
+                currentModel.traverse((child) => {
+                    if (child.isMesh) {
+                        child.geometry.dispose();
+                        if (child.material.isMaterial) {
+                            child.material.dispose();
+                        } else if (Array.isArray(child.material)) {
+                            child.material.forEach(m => m.dispose());
+                        }
+                    }
+                });
+                currentModel = null;
+            }
+        }
+
+        function centerAndFitModel(object) {
+            const box = new THREE.Box3().setFromObject(object);
+            const size = box.getSize(new THREE.Vector3());
+            const center = box.getCenter(new THREE.Vector3());
+
+            object.position.x += (object.position.x - center.x);
+            object.position.y += (object.position.y - center.y);
+            object.position.z += (object.position.z - center.z);
+
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const fov = camera.fov * (Math.PI / 180);
+            let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+            cameraZ *= 1.5; 
+
+            camera.position.set(center.x + cameraZ * 0.5, center.y + cameraZ * 0.5, center.z + cameraZ);
+            camera.lookAt(0, 0, 0);
+
+            controls.target.set(0, 0, 0);
+            controls.maxDistance = cameraZ * 10;
+            controls.update();
+        }
+
+        function processFile(file) {
+            const filename = file.name.toLowerCase();
+            const ext = filename.split('.').pop();
+            
+            if (ext !== 'stl') {
+                showToast("Unsupported file format. Please use .stl only.");
+                return;
+            }
+
+            loadingState.style.display = 'flex';
+            const url = URL.createObjectURL(file);
+
+            clearScene();
+
+            if (ext === 'stl') {
+                const loader = new STLLoader();
+                loader.load(url, (geometry) => {
+                    geometry.center();
+                    geometry.computeVertexNormals();
+                    
+                    const material = defaultMaterial.clone();
+                    material.wireframe = isWireframe;
+                    
+                    const mesh = new THREE.Mesh(geometry, material);
+                    mesh.castShadow = true;
+                    mesh.receiveShadow = true;
+                    
+                    currentModel = mesh;
+                    scene.add(currentModel);
+                    
+                    centerAndFitModel(currentModel);
+                    onModelLoaded();
+                    URL.revokeObjectURL(url);
+                }, undefined, (error) => handleLoadError(error));
+            } else if (ext === '3mf') {
+                const loader = new ThreeMFLoader();
+                loader.load(url, (object) => {
+                    object.traverse((child) => {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                        }
+                    });
+
+                    currentModel = object;
+                    scene.add(currentModel);
+                    
+                    centerAndFitModel(currentModel);
+                    onModelLoaded();
+                    URL.revokeObjectURL(url);
+                }, undefined, (error) => handleLoadError(error));
+            }
+        }
+
+        function onModelLoaded() {
+            loadingState.style.display = 'none';
+            controlsPanel.classList.remove('opacity-0', 'translate-y-4');
+            controlsPanel.classList.add('opacity-100', 'translate-y-0');
+        }
+
+        function handleLoadError(error) {
+            console.error("Error loading model:", error);
+            loadingState.style.display = 'none';
+            showToast("Error loading the model. File might be corrupted.");
+        }
+
+        // --- UI Interactions ---
+        uploadBtn.addEventListener('click', () => fileInput.click());
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                processFile(e.target.files[0]);
+            }
+            fileInput.value = '';
+        });
+
+        window.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropOverlay.classList.add('active');
+        });
+
+        window.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            if (e.clientX === 0 || e.clientY === 0) {
+                dropOverlay.classList.remove('active');
+            }
+        });
+
+        window.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropOverlay.classList.remove('active');
+            if (e.dataTransfer.files.length > 0) {
+                processFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        btnReset.addEventListener('click', () => {
+            if (currentModel) centerAndFitModel(currentModel);
+        });
+
+        btnWireframe.addEventListener('click', () => {
+            isWireframe = !isWireframe;
+            if (currentModel) {
+                currentModel.traverse((child) => {
+                    if (child.isMesh && child.material) {
+                        if (Array.isArray(child.material)) {
+                            child.material.forEach(m => m.wireframe = isWireframe);
+                        } else {
+                            child.material.wireframe = isWireframe;
+                        }
+                    }
+                });
+            }
+            
+            if(isWireframe) {
+                btnWireframe.classList.add('bg-blue-600/20', 'text-blue-400');
+                btnWireframe.classList.remove('text-gray-300');
+            } else {
+                btnWireframe.classList.remove('bg-blue-600/20', 'text-blue-400');
+                btnWireframe.classList.add('text-gray-300');
+            }
+        });
+
+        btnRotate.addEventListener('click', () => {
+            controls.autoRotate = !controls.autoRotate;
+            
+            if(controls.autoRotate) {
+                btnRotate.classList.add('bg-blue-600/20', 'text-blue-400');
+                btnRotate.classList.remove('text-gray-300');
+            } else {
+                btnRotate.classList.remove('bg-blue-600/20', 'text-blue-400');
+                btnRotate.classList.add('text-gray-300');
+            }
+        });
+
+        modelColorPicker.addEventListener('input', (e) => {
+            const color = new THREE.Color(e.target.value);
+            defaultMaterial.color = color; 
+            
+            if (currentModel) {
+                currentModel.traverse((child) => {
+                    if (child.isMesh && child.material) {
+                        if (Array.isArray(child.material)) {
+                            child.material.forEach(m => {
+                                if(!m.map) m.color = color;
+                            });
+                        } else {
+                            if(!child.material.map) child.material.color = color;
+                        }
+                    }
+                });
+            }
+        });
+
+        // Background Color Logic
+        function updateBgColor(colorHex, activeBtn) {
+            scene.background = new THREE.Color(colorHex);
+            
+            // Reset borders
+            [bgBlackBtn, bgGreyBtn, bgWhiteBtn].forEach(btn => {
+                btn.classList.remove('border-blue-500');
+                btn.classList.add('border-transparent');
+            });
+            
+            // Set active border
+            activeBtn.classList.remove('border-transparent');
+            activeBtn.classList.add('border-blue-500');
+        }
+
+        bgBlackBtn.addEventListener('click', () => updateBgColor(0x111827, bgBlackBtn));
+        bgGreyBtn.addEventListener('click', () => updateBgColor(0x6b7280, bgGreyBtn)); // Tailwind gray-500
+        bgWhiteBtn.addEventListener('click', () => updateBgColor(0xffffff, bgWhiteBtn));
+
+    </script>
+</body>
+</html>
